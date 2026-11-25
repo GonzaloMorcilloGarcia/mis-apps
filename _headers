@@ -1,0 +1,12 @@
+# Cabeceras de seguridad para Netlify (GitHub Pages ignora este archivo; las apps ya llevan su CSP dentro).
+# - nosniff: el navegador no "adivina" tipos de archivo.
+# - no-referrer: al abrir un enlace externo no se envía la dirección de la app.
+# - frame-ancestors 'none' / DENY: ninguna otra web puede incrustar las apps (evita clickjacking).
+# - Permissions-Policy: las apps no usan cámara, micrófono ni ubicación; se bloquean.
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+  X-Frame-Options: DENY
+  Content-Security-Policy: frame-ancestors 'none'
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
+  Cross-Origin-Opener-Policy: same-origin

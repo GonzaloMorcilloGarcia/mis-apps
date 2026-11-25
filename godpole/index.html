@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <!--
+    Política de seguridad (CSP). Qué permite y por qué:
+    - script-src 'self': solo los scripts de la propia app; ningún script en línea ni de terceros.
+      ('file:' solo sirve para abrir index.html con doble clic en el ordenador; una web https no puede cargar archivos locales.)
+      Si un texto importado o descargado intentara inyectar código, el navegador no lo ejecutaría.
+    - connect-src: la app solo puede conectarse a sí misma y a las dos fuentes del Evangelio
+      (evangeliodeldia.org y tu conector de Cloudflare *.workers.dev). Tus datos nunca se envían.
+    - Nada de marcos, plugins, formularios externos ni <base> ajenos.
+  -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' file:; style-src 'self' file: 'unsafe-inline'; img-src 'self' file: data: blob:; font-src 'self'; manifest-src 'self'; worker-src 'self'; connect-src 'self' https://feed.evangelizo.org https://*.workers.dev; form-action 'none'; base-uri 'none'; object-src 'none'; frame-src 'none'" />
+  <meta name="referrer" content="no-referrer" />
+  <title>GodPole</title>
+  <meta name="description" content="Tus objetivos diarios, tu ánimo, tu diario y el Evangelio de cada día." />
+
+  <!-- iPhone / PWA -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="GodPole" />
+  <meta name="theme-color" content="#f4f3f9" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#0b0b14" media="(prefers-color-scheme: dark)" />
+  <meta name="format-detection" content="telephone=no" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <link rel="icon" type="image/png" href="icons/favicon.png" />
+  <link rel="manifest" href="manifest.webmanifest" />
+
+  <link rel="stylesheet" href="css/app.css?v=daebecf584" />
+  <script src="js/theme.js"></script>
+</head>
+<body>
+  <div class="statusbar" aria-hidden="true"></div>
+  <main class="view" id="view"></main>
+  <nav class="tabbar" id="tabbar" aria-label="Secciones"></nav>
+
+  <noscript>GodPole necesita JavaScript activado.</noscript>
+  <!-- js/app.bundle.js?v=3b1de5ff28 se genera con: py tools/build.py (funciona también con doble clic) -->
+  <script src="js/app.bundle.js?v=3b1de5ff28" defer></script>
+</body>
+</html>

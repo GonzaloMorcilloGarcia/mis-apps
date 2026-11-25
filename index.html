@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- Portada sin scripts: solo enlaces e instrucciones -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex, nofollow">
+<meta name="color-scheme" content="light dark">
+<title>Mis apps</title>
+<style>
+  :root { --bg:#f4f4f7; --card:#fff; --text:#16161d; --muted:#666a75; --line:#e3e3ea; --accent:#3d5afe; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0d0e12; --card:#17181e; --text:#f1f1f4; --muted:#9a9eab; --line:#2a2c35; --accent:#8c9eff; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; background:var(--bg); color:var(--text);
+         padding: max(24px, env(safe-area-inset-top)) 18px max(32px, env(safe-area-inset-bottom)); }
+  main { max-width: 560px; margin: 0 auto; }
+  h1 { font-size: 28px; margin: 8px 0 4px; letter-spacing: -0.02em; }
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 32px 0 10px; }
+  p { margin: 0 0 10px; }
+  .lead { color: var(--muted); }
+  .apps { display: grid; gap: 10px; }
+  a.app { display:flex; align-items:center; gap:14px; padding:14px; background:var(--card); border:1px solid var(--line); border-radius:18px; color:inherit; text-decoration:none; }
+  a.app:active { transform: scale(.99); }
+  a.app img { width:56px; height:56px; border-radius:13px; flex:none; }
+  a.app b { display:block; font-size:17px; }
+  a.app span { color:var(--muted); font-size:14px; }
+  a.app i { margin-left:auto; font-style:normal; color:var(--accent); font-weight:600; }
+  ol { margin:0; padding-left: 22px; }
+  li { margin-bottom: 8px; }
+  .box { background:var(--card); border:1px solid var(--line); border-radius:18px; padding:16px 18px; }
+  .note { font-size: 14px; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Mis apps</h1>
+  <p class="lead">Se instalan una vez y después funcionan sin conexión. Tus datos se quedan solo en tu móvil.</p>
+
+  <h2>Abrir</h2>
+  <div class="apps">
+    <a class="app" href="godpole/"><img src="godpole/icons/icon-192.png" alt=""><div><b>GodPole</b><span>Objetivos, ánimo, diario y Evangelio</span></div><i>Abrir</i></a>
+    <a class="app" href="gymtrack/"><img src="gymtrack/assets/icon-192.png" alt=""><div><b>GymTrack</b><span>Entrenamiento, comida, sueño y peso</span></div><i>Abrir</i></a>
+    <a class="app" href="roney/"><img src="roney/icons/icon-192.png" alt=""><div><b>Roney</b><span>Finanzas personales (cifrada)</span></div><i>Abrir</i></a>
+  </div>
+
+  <h2>Instalar en el iPhone</h2>
+  <div class="box">
+    <ol>
+      <li>Abre esta página en <b>Safari</b> (no en otro navegador).</li>
+      <li>Toca una app para abrirla.</li>
+      <li>Pulsa <b>Compartir</b> → <b>Añadir a pantalla de inicio</b> → <b>Añadir</b>.</li>
+      <li>Abre la app <b>desde el icono nuevo</b> una vez con conexión. A partir de ahí funciona también en modo avión.</li>
+      <li>Repite con las otras dos apps.</li>
+    </ol>
+    <p class="note">Usa siempre el icono de la pantalla de inicio: los datos de la app instalada están separados de los de Safari.</p>
+  </div>
+
+  <h2>Cambiar de móvil</h2>
+  <div class="box">
+    <ol>
+      <li>En el móvil antiguo, en cada app: <b>Exportar copia cifrada</b> y guárdala en <b>iCloud Drive</b> (o pásala por AirDrop).
+        <br><span class="note">GodPole: Ajustes · GymTrack: Perfil → Copia de seguridad · Roney: Ajustes → «Exportar copia» (sale cifrada con tu frase de paso).</span></li>
+      <li>En el móvil nuevo, instala las tres apps desde esta página (pasos de arriba).</li>
+      <li>En cada app: <b>Importar copia</b>, elige el archivo y escribe su contraseña.</li>
+    </ol>
+    <p class="note">Sin la contraseña de la copia no hay forma de recuperarla. Apúntala en un lugar seguro (por ejemplo, el llavero de contraseñas del iPhone).</p>
+  </div>
+</main>
+</body>
+</html>
