@@ -912,3 +912,12 @@ body.welcome-mode .tabbar { display: none; }
 /* Copia de seguridad: botón desactivado (sin cifrado disponible) y error de contraseña */
 .list-row:disabled { opacity: 0.45; pointer-events: none; }
 .hint.pp-error { color: var(--danger); min-height: 1em; }
+
+/* Objetivos flexibles */
+.stepper { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: var(--surface-2); border-radius: 12px; padding: 6px; }
+.stepper span { font-size: 15px; color: var(--text-2); }
+.stepper span b { color: var(--text); font-size: 17px; }
+.stepper .icon-btn { font-size: 20px; font-weight: 700; }
+.flex-tag { font-size: 12px; font-weight: 650; color: var(--text-2); background: var(--surface-2); border-radius: 999px; padding: 1px 8px; }
+.flex-tag.met { color: var(--success); }
+.flex-head { margin-top: 18px; }

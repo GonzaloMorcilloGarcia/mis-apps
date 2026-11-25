@@ -377,6 +377,10 @@ __m['store.js'] = (function () {
 // Modelo:
 //   goals: [{ id, title, emoji, schedule, createdAt, archivedAt, order, priority, facetId, target, unit }]
 //     schedule = { type: 'daily' } | { type: 'weekdays', days: [0..6] } | { type: 'date', date: 'YYYY-MM-DD' }
+//              | { type: 'flex', every: 'week' | 'month' | null, times: N }
+//       'flex' = objetivo flexible: no toca ningún día concreto, se marca el día que se hace y sus puntos
+//       suman como extra a ese día (nunca penaliza un día). Con every='week'/'month' tiene una meta de
+//       N veces por semana/mes, que se mide por semanas/meses cumplidos. Con every=null es libre (sin meta).
 //     priority = 'low' | 'medium' | 'high' | 'max'  (puntos 1 · 2 · 3 · 5)
 //     target/unit: si hay target, es un objetivo con cantidad (p. ej. 20 páginas)
 //   facets: [{ id, name, emoji, color, order }]   (carpetas: Fe, Ejercicio, Finanzas…)
@@ -498,6 +502,12 @@ function cleanSchedule(s) {
     return { type: 'weekdays', days: [...new Set(days)] };
   }
   if (s && s.type === 'date' && cleanDate(s.date)) return { type: 'date', date: s.date };
+  if (s && s.type === 'flex') {
+    const every = s.every === 'week' || s.every === 'month' ? s.every : null;
+    const max = every === 'week' ? 7 : 31;
+    const times = Math.round(Number(s.times));
+    return { type: 'flex', every, times: every ? Math.min(max, Math.max(1, Number.isFinite(times) ? times : 1)) : null };
+  }
   return { type: 'daily' };
 }
 
@@ -619,7 +629,19 @@ function uid() {
 
 // ---------- Programación de objetivos ----------
 
+function isFlex(goal) {
+  return !!(goal && goal.schedule && goal.schedule.type === 'flex');
+}
+
+/** Objetivos flexibles disponibles para marcar un día (creados antes y no archivados entonces). */
+function flexGoals(key) {
+  return state.goals
+    .filter((g) => isFlex(g) && (!g.createdAt || key >= g.createdAt) && (!g.archivedAt || key < g.archivedAt))
+    .sort((a, b) => a.order - b.order);
+}
+
 function isScheduled(goal, key) {
+  if (isFlex(goal)) return false; // los flexibles nunca son obligatorios un día concreto
   if (goal.createdAt && key < goal.createdAt && goal.schedule.type !== 'date') return false;
   if (goal.archivedAt && key >= goal.archivedAt) return false;
   const s = goal.schedule || { type: 'daily' };
@@ -912,7 +934,7 @@ function resetAll() {
   persist();
 }
 
-return { GOSPEL_BONUS, PRIORITIES, goalPoints, priorityLabel, isQuantity, goalProgress, FACET_COLORS, getState, subscribe, uid, isScheduled, plannedGoals, plannedIds, freezePastDays, getLog, toggleGoal, setGoalAmount, setMood, setNote, toggleGospelRead, addGoal, updateGoal, archiveGoal, restoreGoal, deleteGoal, moveGoal, updateSettings, addFacet, updateFacet, deleteFacet, getFacet, addQuote, updateQuote, deleteQuote, restoreDefaultQuotes, exportData, MAX_IMPORT_BYTES, parseBackupText, summarizeBackup, importData, markExported, resetAll };
+return { GOSPEL_BONUS, PRIORITIES, goalPoints, priorityLabel, isQuantity, goalProgress, FACET_COLORS, getState, subscribe, uid, isFlex, flexGoals, isScheduled, plannedGoals, plannedIds, freezePastDays, getLog, toggleGoal, setGoalAmount, setMood, setNote, toggleGospelRead, addGoal, updateGoal, archiveGoal, restoreGoal, deleteGoal, moveGoal, updateSettings, addFacet, updateFacet, deleteFacet, getFacet, addQuote, updateQuote, deleteQuote, restoreDefaultQuotes, exportData, MAX_IMPORT_BYTES, parseBackupText, summarizeBackup, importData, markExported, resetAll };
 })();
 // ---- gospel.js ----
 __m['gospel.js'] = (function () {
@@ -1372,8 +1394,8 @@ return { applyTheme, esc, icons, MOODS, moodFor, pct, heatClass, ringSvg, openSh
 __m['stats.js'] = (function () {
 // Cálculo de estadísticas: cumplimiento, rachas, ánimo y series para gráficos.
 
-const { getState, plannedIds, plannedGoals, getLog, goalPoints, goalProgress, GOSPEL_BONUS } = __m['store.js'];
-const { todayKey, addDays, eachDay, minKey, maxKey, startOfMonth, endOfMonth, startOfYear, endOfYear, addMonths, fromKey, } = __m['dates.js'];
+const { getState, plannedIds, plannedGoals, getLog, goalPoints, goalProgress, GOSPEL_BONUS, isFlex } = __m['store.js'];
+const { todayKey, addDays, eachDay, minKey, maxKey, startOfMonth, endOfMonth, startOfYear, endOfYear, addMonths, fromKey, startOfWeek, } = __m['dates.js'];
 
 /**
  * Estadísticas de un día. Ponderadas por prioridad: ratio = puntos conseguidos / puntos previstos.
@@ -1397,7 +1419,21 @@ function dayStats(key, scope = null) {
     ptsDone += w * f;
     if (f >= 1) done++;
   }
-  const bonus = !scope && log.gospelRead ? GOSPEL_BONUS : 0;
+  // Objetivos flexibles hechos ese día: sus puntos suman como extra (no entran en los previstos,
+  // así que no hacerlos nunca penaliza el día). Respetan el filtro de faceta.
+  const plannedSet = new Set(goals.map((g) => g.id));
+  let flexPts = 0, flexDone = 0;
+  for (const g of getState().goals) {
+    if (!isFlex(g) || plannedSet.has(g.id)) continue;
+    const v = (log.done || {})[g.id];
+    if (!v) continue;
+    if (scope && scope.facetId && (scope.facetId === '__none' ? g.facetId : g.facetId !== scope.facetId)) continue;
+    const f = goalProgress(g, v);
+    flexPts += goalPoints(g) * f;
+    if (f >= 1) flexDone++;
+  }
+  const gospel = !scope && log.gospelRead ? GOSPEL_BONUS : 0;
+  const bonus = gospel + flexPts;
   ptsDone += bonus;
   return {
     key,
@@ -1406,6 +1442,8 @@ function dayStats(key, scope = null) {
     pts,
     ptsDone,
     bonus,
+    flexPts,
+    flexDone,
     ratio: pts ? Math.min(1, ptsDone / pts) : null,
     mood: log.mood || null,
     gospelRead: !!log.gospelRead,
@@ -1594,8 +1632,13 @@ function goalStats(from, to) {
 function goalDayStatus(goalId, key) {
   const today = todayKey();
   if (key < getState().startDate) return 'off';
-  if (!plannedIds(key).includes(goalId)) return 'off';
   const goal = getState().goals.find((g) => g.id === goalId);
+  if (!plannedIds(key).includes(goalId)) {
+    // Flexible: solo se distingue si se hizo ese día; si no, "no tocaba" (nunca "no cumplido")
+    if (!isFlex(goal) || key > today) return 'off';
+    const f = goalProgress(goal, (getLog(key).done || {})[goalId]);
+    return f >= 1 ? 'done' : f > 0 ? 'partial' : 'off';
+  }
   const f = goalProgress(goal, (getLog(key).done || {})[goalId]);
   if (f >= 1) return 'done';
   if (key > today) return 'future';
@@ -1610,6 +1653,7 @@ function goalRangeStats(goalId, from, to) {
   const start = maxKey(from, getState().startDate);
   const end = minKey(to, today);
   const goal = getState().goals.find((g) => g.id === goalId);
+  if (isFlex(goal)) return flexRangeStats(goal, from, to);
   let planned = 0, done = 0, frac = 0;
   if (start <= end) {
     for (const k of eachDay(start, end)) {
@@ -1638,6 +1682,8 @@ function facetStats(from, to) {
 
 function goalStreak(goalId) {
   const s = getState();
+  const goal = s.goals.find((g) => g.id === goalId);
+  if (isFlex(goal)) return flexStreaks(goal).current;
   let k = todayKey();
   if (goalDayStatus(goalId, k) !== 'done') k = addDays(k, -1);
   let n = 0, guard = 0;
@@ -1652,6 +1698,8 @@ function goalStreak(goalId) {
 
 function goalBestStreak(goalId) {
   const s = getState();
+  const goal = s.goals.find((g) => g.id === goalId);
+  if (isFlex(goal)) return flexStreaks(goal).best;
   let best = 0, run = 0;
   for (const k of eachDay(s.startDate, todayKey())) {
     const st = goalDayStatus(goalId, k);
@@ -1671,7 +1719,107 @@ function moodSeries(period, ref = todayKey()) {
   return periodSeries(period, ref).map((p) => ({ key: p.key, label: p.label, value: p.mood }));
 }
 
-return { dayStats, isAchieved, rangeStats, currentStreak, bestStreak, periodRange, totalByYear, periodSeries, goalStats, goalDayStatus, goalRangeStats, facetStats, goalStreak, goalBestStreak, moodSeries };
+// ---------- Objetivos flexibles (semanales, mensuales y libres) ----------
+
+/** Semana (lunes-domingo) o mes que contiene la fecha. */
+function flexPeriod(goal, key) {
+  if (goal.schedule.every === 'week') {
+    const from = startOfWeek(key);
+    return { from, to: addDays(from, 6) };
+  }
+  return { from: startOfMonth(key), to: endOfMonth(key) };
+}
+
+/** Veces hechas en un rango (los de cantidad suman la parte hecha: dos mitades = 1 vez). */
+function flexCount(goal, from, to) {
+  const start = maxKey(from, getState().startDate);
+  const end = minKey(to, todayKey());
+  let n = 0;
+  if (start > end) return 0;
+  for (const k of eachDay(start, end)) {
+    const v = (getLog(k).done || {})[goal.id];
+    if (v) n += goalProgress(goal, v);
+  }
+  return n;
+}
+
+/** Progreso en la semana/mes actual: { count, times, every } (para "2/3 esta semana"). */
+function flexNow(goal, key = todayKey()) {
+  const { every, times } = goal.schedule;
+  if (!every) {
+    const m = { from: startOfMonth(key), to: endOfMonth(key) };
+    return { count: flexCount(goal, m.from, m.to), times: null, every: null };
+  }
+  const p = flexPeriod(goal, key);
+  return { count: flexCount(goal, p.from, p.to), times, every };
+}
+
+/** Semanas/meses que "cuentan" para un rango: los que terminan dentro de él (y el actual solo si ya está cumplido). */
+function flexPeriodsIn(goal, from, to) {
+  const s = getState();
+  const today = todayKey();
+  const begin = maxKey(maxKey(from, s.startDate), goal.createdAt || s.startDate);
+  const out = [];
+  if (begin > minKey(to, today)) return out;
+  let p = flexPeriod(goal, begin);
+  let guard = 0;
+  while (p.from <= minKey(to, today) && guard++ < 2000) {
+    if (goal.archivedAt && p.from >= goal.archivedAt) break;
+    const ends = p.to;
+    // Cada periodo cuenta en el rango donde termina; el periodo en curso, en el rango que contiene hoy
+    const isCurrent = p.from <= today && today <= p.to;
+    if (ends >= from && (ends <= to || (isCurrent && today >= from && today <= to))) {
+      const count = flexCount(goal, p.from, p.to);
+      const met = count >= goal.schedule.times - 1e-9;
+      const finished = ends < today;
+      // La primera semana/mes, si el objetivo se creó a mitad, solo cuenta si se llegó a cumplir
+      const partialStart = p.from < maxKey(s.startDate, goal.createdAt || s.startDate);
+      if ((finished || met) && (!partialStart || met)) out.push({ ...p, count, met });
+    }
+    p = flexPeriod(goal, addDays(p.to, 1));
+  }
+  return out;
+}
+
+/**
+ * Estadísticas de un objetivo flexible en un rango, con los mismos campos que goalRangeStats.
+ *  - Semanal/mensual: rate = semanas (o meses) cumplidos / semanas (o meses) que cuentan;
+ *    planned = veces previstas en esos periodos; done = veces hechas (sin pasar de la meta de cada periodo).
+ *  - Libre: no hay meta (rate = null); count = veces hechas.
+ * Siempre: count (veces) y pts (puntos sumados como extra).
+ */
+function flexRangeStats(goal, from, to) {
+  const count = flexCount(goal, from, to);
+  const pts = count * goalPoints(goal);
+  const base = { flex: true, every: goal.schedule.every, count, pts };
+  if (!goal.schedule.every) return { ...base, planned: 0, done: count, frac: count, rate: null, periods: 0, periodsMet: 0 };
+  const periods = flexPeriodsIn(goal, from, to);
+  const times = goal.schedule.times;
+  const met = periods.filter((p) => p.met).length;
+  const done = periods.reduce((a, p) => a + Math.min(times, p.count), 0);
+  return {
+    ...base,
+    planned: periods.length * times,
+    done,
+    frac: done,
+    rate: periods.length ? met / periods.length : null,
+    periods: periods.length,
+    periodsMet: met,
+  };
+}
+
+/** Racha de semanas/meses seguidos cumplidos (la actual cuenta si ya está cumplida). Los libres no tienen racha. */
+function flexStreaks(goal) {
+  if (!goal.schedule.every) return { current: 0, best: 0 };
+  const periods = flexPeriodsIn(goal, getState().startDate, todayKey());
+  let best = 0, run = 0;
+  for (const p of periods) { run = p.met ? run + 1 : 0; best = Math.max(best, run); }
+  let current = 0;
+  for (let i = periods.length - 1; i >= 0 && periods[i].met; i--) current++;
+  return { current, best };
+}
+
+return { dayStats, isAchieved, rangeStats, currentStreak, bestStreak, periodRange, totalByYear, periodSeries, goalStats, goalDayStatus, goalRangeStats, facetStats, goalStreak, goalBestStreak, moodSeries, flexPeriod, flexCount, flexNow, flexRangeStats };
 })();
 // ---- crypto.js ----
 __m['crypto.js'] = (function () {
@@ -2146,11 +2294,11 @@ return { barChart, dotMatrix, heatMatrix, moodChart, lineChart, bindLineCharts, 
 __m['sheets.js'] = (function () {
 // Hojas (pantallas superpuestas): Evangelio, diario, objetivo, día, ajustes y frases.
 
-const { getState, addGoal, updateGoal, archiveGoal, restoreGoal, deleteGoal, updateSettings, exportData, importData, resetAll, toggleGospelRead, getLog, setNote, setMood, toggleGoal, plannedGoals, addQuote, updateQuote, deleteQuote, restoreDefaultQuotes, PRIORITIES, FACET_COLORS, addFacet, updateFacet, deleteFacet, getFacet, isQuantity, goalProgress, setGoalAmount, priorityLabel, goalPoints, parseBackupText, summarizeBackup, markExported, } = __m['store.js'];
+const { getState, addGoal, updateGoal, archiveGoal, restoreGoal, deleteGoal, updateSettings, exportData, importData, resetAll, toggleGospelRead, getLog, setNote, setMood, toggleGoal, plannedGoals, addQuote, updateQuote, deleteQuote, restoreDefaultQuotes, PRIORITIES, FACET_COLORS, addFacet, updateFacet, deleteFacet, getFacet, isQuantity, goalProgress, setGoalAmount, priorityLabel, goalPoints, parseBackupText, summarizeBackup, markExported, isFlex, flexGoals, } = __m['store.js'];
 const { cryptoAvailable, encryptText, decryptEnvelope, isEncrypted, passphraseProblem } = __m['crypto.js'];
 const { todayKey, formatShort, formatLong, formatMonthYear, addMonths, startOfMonth, endOfMonth, eachDay, fromKey, WEEK_ORDER, WEEKDAY_SHORT, WEEKDAY_NAMES, capitalize, startOfYear, endOfYear, MONTH_SHORT, } = __m['dates.js'];
 const { getGospel, getCachedGospel, SOURCES, testConnector, clearGospelCache, DEFAULT_CONNECTOR } = __m['gospel.js'];
-const { goalDayStatus, goalRangeStats, goalStreak, goalBestStreak } = __m['stats.js'];
+const { goalDayStatus, goalRangeStats, goalStreak, goalBestStreak, flexNow } = __m['stats.js'];
 const { barChart } = __m['charts.js'];
 const { esc, icons, openSheet, toast, MOODS, moodFor, pct, confirmDialog, applyTheme } = __m['ui.js'];
 
@@ -2158,8 +2306,17 @@ const { esc, icons, openSheet, toast, MOODS, moodFor, pct, confirmDialog, applyT
 // Utilidades
 // ======================================================================
 
+function times(n, one, many) {
+  return n === 1 ? one : `${n} ${many}`;
+}
+
 function scheduleLabel(goal) {
   const s = goal.schedule || { type: 'daily' };
+  if (s.type === 'flex') {
+    if (s.every === 'week') return times(s.times, 'Una vez por semana', 'veces por semana');
+    if (s.every === 'month') return times(s.times, 'Una vez al mes', 'veces al mes');
+    return 'Libre · cuando quieras';
+  }
   if (s.type === 'daily') return 'Todos los días';
   if (s.type === 'date') return `Solo el ${formatShort(s.date)}`;
   const days = WEEK_ORDER.filter((d) => (s.days || []).includes(d));
@@ -2168,6 +2325,22 @@ function scheduleLabel(goal) {
   if (days.length === 2 && days.includes(0) && days.includes(6)) return 'Fines de semana';
   if (days.length === 1) return `Cada ${WEEKDAY_NAMES[days[0]]}`;
   return days.map((d) => capitalize(WEEKDAY_NAMES[d]).slice(0, 3)).join(', ');
+}
+
+const fmtN = (n) => (Number.isInteger(n) ? String(n) : n.toFixed(1).replace('.', ','));
+
+/** Progreso de un flexible en su semana/mes: "2/3 esta semana", "1/2 este mes" o "4 veces este mes". */
+function flexProgressLabel(goal, key = todayKey()) {
+  const n = flexNow(goal, key);
+  if (n.every === 'week') return `${fmtN(n.count)}/${n.times} esta semana`;
+  if (n.every === 'month') return `${fmtN(n.count)}/${n.times} este mes`;
+  return `${fmtN(n.count)} ${n.count === 1 ? 'vez' : 'veces'} este mes`;
+}
+
+/** ¿Ya ha cumplido la meta de su semana/mes? (los libres nunca "se completan") */
+function flexMet(goal, key = todayKey()) {
+  const n = flexNow(goal, key);
+  return !!n.every && n.count >= n.times - 1e-9;
 }
 
 /** Texto de cantidad: "12 / 20 páginas". */
@@ -2318,6 +2491,9 @@ function openDaySheet(dateKey, onChange) {
       const future = dateKey > today;
       const past = dateKey < today;
       const done = goals.filter((g) => log.done[g.id]).length;
+      // Flexibles: los disponibles ese día y los que se hicieron (aunque luego se archivaran)
+      const flex = getState().goals.filter((g) => isFlex(g) && !goals.includes(g)
+        && (flexGoals(dateKey).includes(g) || log.done[g.id]));
       body.innerHTML = `
         ${future ? '' : `<section class="block">
           <h3 class="block-title">Estado de ánimo</h3>
@@ -2336,6 +2512,19 @@ function openDaySheet(dateKey, onChange) {
             </button>`;
           }).join('')}</div>` : '<p class="muted">No había objetivos programados.</p>'}
         </section>
+        ${flex.length && !future ? `<section class="block">
+          <div class="block-head"><h3 class="block-title">Flexibles</h3><span class="meta">Suman puntos extra</span></div>
+          <div class="card list-card">${flex.map((g) => {
+            const f = goalProgress(g, log.done[g.id]);
+            const d = f >= 1;
+            return `<button class="goal ${d ? 'done' : ''} ${f > 0 && f < 1 ? 'is-partial' : ''}" data-goal="${g.id}">
+              <span class="g-emoji">${esc(g.emoji)}</span>
+              <span class="g-body"><div class="g-title">${esc(g.title)}</div>
+                <div class="g-sub">${esc(scheduleLabel(g))}${d ? ` · +${fmtN(goalPoints(g) * f)} pts` : ''}</div></span>
+              <span class="check" style="--f:${f}">${d ? icons.check : f > 0 ? `${Math.round(f * 100)}` : ''}</span>
+            </button>`;
+          }).join('')}</div>
+        </section>` : ''}
         ${future ? '' : `<section class="block">
           <div class="block-head"><h3 class="block-title">Diario</h3>
             <button class="link-btn" data-journal>${log.note ? 'Editar' : 'Escribir'}</button></div>
@@ -2392,6 +2581,26 @@ function openGoalDetail(goalId, onChange) {
         cells += `<div class="gc-day st-${st} ${k === today ? 'today' : ''}">${fromKey(k).getDate()}</div>`;
       }
       const yr = ref.slice(0, 4);
+      const flex = isFlex(goal);
+      const every = flex ? goal.schedule.every : null;
+      const unitP = every === 'week' ? ['semana', 'semanas'] : ['mes', 'meses'];
+      const veces = (n) => `${fmtN(n)} ${n === 1 ? 'vez' : 'veces'}`;
+      const now = flex ? flexNow(goal, today) : null;
+      const stats = !flex ? `
+          <div class="stat"><div class="s-val">${pct(month.rate)}</div><div class="s-lbl">Este mes</div><div class="s-sub">${month.done} de ${month.planned} días</div></div>
+          <div class="stat"><div class="s-val">${pct(year.rate)}</div><div class="s-lbl">Este año</div><div class="s-sub">${year.done} de ${year.planned} días</div></div>
+          <div class="stat"><div class="s-val">🔥 ${streak}</div><div class="s-lbl">Racha actual</div><div class="s-sub">Mejor: ${best} ${best === 1 ? 'día' : 'días'}</div></div>
+          <div class="stat"><div class="s-val">${all.done}</div><div class="s-lbl">Veces cumplido</div><div class="s-sub">${pct(all.rate)} desde el inicio</div></div>`
+        : every ? `
+          <div class="stat"><div class="s-val">${fmtN(now.count)}/${now.times}</div><div class="s-lbl">${every === 'week' ? 'Esta semana' : 'Este mes'}</div><div class="s-sub">${now.count >= now.times ? '¡Meta cumplida!' : `Faltan ${fmtN(now.times - now.count)}`}</div></div>
+          <div class="stat"><div class="s-val">${pct(year.rate)}</div><div class="s-lbl">Este año</div><div class="s-sub">${year.periodsMet} de ${year.periods} ${unitP[1]} cumplidas</div></div>
+          <div class="stat"><div class="s-val">🔥 ${streak}</div><div class="s-lbl">Racha actual</div><div class="s-sub">Mejor: ${best} ${best === 1 ? unitP[0] : unitP[1]}</div></div>
+          <div class="stat"><div class="s-val">${fmtN(all.count)}</div><div class="s-lbl">Veces hecho</div><div class="s-sub">+${fmtN(all.pts)} pts en total</div></div>`
+        : `
+          <div class="stat"><div class="s-val">${fmtN(month.count)}</div><div class="s-lbl">Este mes</div><div class="s-sub">${veces(month.count)} · +${fmtN(month.pts)} pts</div></div>
+          <div class="stat"><div class="s-val">${fmtN(year.count)}</div><div class="s-lbl">Este año</div><div class="s-sub">+${fmtN(year.pts)} pts</div></div>
+          <div class="stat"><div class="s-val">${fmtN(all.count)}</div><div class="s-lbl">En total</div><div class="s-sub">${veces(all.count)}</div></div>
+          <div class="stat"><div class="s-val">+${fmtN(all.pts)}</div><div class="s-lbl">Puntos extra</div><div class="s-sub">Desde el inicio</div></div>`;
       const bars = MONTH_SHORT.map((mm, i) => {
         const m0 = `${yr}-${String(i + 1).padStart(2, '0')}-01`;
         const r = goalRangeStats(goalId, m0, endOfMonth(m0));
@@ -2413,11 +2622,7 @@ function openGoalDetail(goalId, onChange) {
           <button class="btn secondary small" data-edit>${icons.edit}<span>Editar</span></button>
         </header>
 
-        <div class="stat-grid">
-          <div class="stat"><div class="s-val">${pct(month.rate)}</div><div class="s-lbl">Este mes</div><div class="s-sub">${month.done} de ${month.planned} días</div></div>
-          <div class="stat"><div class="s-val">${pct(year.rate)}</div><div class="s-lbl">Este año</div><div class="s-sub">${year.done} de ${year.planned} días</div></div>
-          <div class="stat"><div class="s-val">🔥 ${streak}</div><div class="s-lbl">Racha actual</div><div class="s-sub">Mejor: ${best} ${best === 1 ? 'día' : 'días'}</div></div>
-          <div class="stat"><div class="s-val">${all.done}</div><div class="s-lbl">Veces cumplido</div><div class="s-sub">${pct(all.rate)} desde el inicio</div></div>
+        <div class="stat-grid">${stats}
         </div>
 
         <section class="card">
@@ -2431,14 +2636,16 @@ function openGoalDetail(goalId, onChange) {
             ${cells}
           </div>
           <div class="chart-legend">
-            <span><i class="lg done"></i>Cumplido</span>${isQuantity(goal) ? '<span><i class="lg partial"></i>A medias</span>' : ''}<span><i class="lg missed"></i>No cumplido</span><span><i class="lg off"></i>No tocaba</span>
+            ${flex
+              ? `<span><i class="lg done"></i>Hecho</span>${isQuantity(goal) ? '<span><i class="lg partial"></i>A medias</span>' : ''}<span><i class="lg off"></i>Sin hacer (no penaliza)</span>`
+              : `<span><i class="lg done"></i>Cumplido</span>${isQuantity(goal) ? '<span><i class="lg partial"></i>A medias</span>' : ''}<span><i class="lg missed"></i>No cumplido</span><span><i class="lg off"></i>No tocaba</span>`}
           </div>
         </section>
 
-        <section class="card">
-          <div class="card-head left"><h3>Año ${yr}</h3><span class="muted">% de días cumplidos</span></div>
+        ${flex && !every ? '' : `<section class="card">
+          <div class="card-head left"><h3>Año ${yr}</h3><span class="muted">${every ? `% de ${unitP[1]} cumplidas` : '% de días cumplidos'}</span></div>
           ${barChart(bars, { threshold: s.settings.threshold, height: 170 })}
-        </section>`;
+        </section>`}`;
 
       body.querySelector('[data-edit]').addEventListener('click', () => openGoalEditor(goal, () => { onChange && onChange(); api.rerender(); }));
       body.querySelectorAll('[data-nav]').forEach((b) => b.addEventListener('click', () => {
@@ -2464,13 +2671,16 @@ function openGoalEditor(goal, onDone) {
     type: goal?.schedule?.type || 'daily',
     days: goal?.schedule?.type === 'weekdays' ? [...goal.schedule.days] : [],
     date: goal?.schedule?.type === 'date' ? goal.schedule.date : todayKey(),
+    flexEvery: goal?.schedule?.type === 'flex' ? (goal.schedule.every || 'free') : 'week',
+    flexTimes: goal?.schedule?.type === 'flex' && goal.schedule.times ? goal.schedule.times : 1,
     priority: goal?.priority || 'medium',
     facetId: goal?.facetId || null,
     qty: isQuantity(goal),
     target: goal?.target || '',
     unit: goal?.unit || '',
   };
-  const types = [['daily', 'Diario'], ['weekdays', 'Días'], ['date', 'Una fecha']];
+  const types = [['daily', 'Diario'], ['weekdays', 'Días'], ['flex', 'Flexible'], ['date', 'Una fecha']];
+  const flexKinds = [['week', 'Por semana'], ['month', 'Por mes'], ['free', 'Libre']];
 
   const sheet = openSheet({
     title: editing ? 'Editar objetivo' : 'Nuevo objetivo',
@@ -2491,7 +2701,7 @@ function openGoalEditor(goal, onDone) {
         </div>
         <div class="field">
           <span class="f-label">Frecuencia</span>
-          <div class="seg big">
+          <div class="seg big four">
             <div class="seg-thumb" style="transform: translateX(${ti * 100}%)"></div>
             ${types.map(([t, l]) => `<button class="${t === draft.type ? 'active' : ''}" data-type="${t}">${l}</button>`).join('')}
           </div>
@@ -2501,6 +2711,19 @@ function openGoalEditor(goal, onDone) {
               ${WEEK_ORDER.map((d) => `<button class="chip ${draft.days.includes(d) ? 'on' : ''}" data-wd="${d}" aria-pressed="${draft.days.includes(d)}">${WEEKDAY_SHORT[d]}</button>`).join('')}
             </div>
             <div class="hint">${draft.days.length ? esc(scheduleLabel({ schedule: { type: 'weekdays', days: draft.days } })) : 'Elige uno o varios días de la semana.'}</div>` : ''}
+          ${draft.type === 'flex' ? `
+            <div class="seg">
+              <div class="seg-thumb" style="transform: translateX(${flexKinds.findIndex(([k]) => k === draft.flexEvery) * 100}%)"></div>
+              ${flexKinds.map(([k, l]) => `<button class="${k === draft.flexEvery ? 'active' : ''}" data-flex-every="${k}">${l}</button>`).join('')}
+            </div>
+            ${draft.flexEvery !== 'free' ? `
+            <div class="stepper">
+              <button class="icon-btn sm" data-flex-times="-1" aria-label="Menos veces" ${draft.flexTimes <= 1 ? 'disabled' : ''}>−</button>
+              <span><b>${draft.flexTimes}</b> ${draft.flexTimes === 1 ? 'vez' : 'veces'} ${draft.flexEvery === 'week' ? 'por semana' : 'al mes'}</span>
+              <button class="icon-btn sm" data-flex-times="1" aria-label="Más veces" ${draft.flexTimes >= (draft.flexEvery === 'week' ? 7 : 31) ? 'disabled' : ''}>+</button>
+            </div>
+            <div class="hint">Lo marcas el día que lo hagas, sin día fijo. Esos días suma sus puntos como extra, y en Progreso verás cuántas ${draft.flexEvery === 'week' ? 'semanas' : 'veces al mes'} cumples la meta. No hacerlo un día concreto nunca baja tu puntuación.</div>`
+            : '<div class="hint">Sin meta ni día fijo: cada vez que lo hagas (p. ej. terminar un libro) suma sus puntos como extra a ese día y aparece en tus estadísticas. No hacerlo nunca penaliza.</div>'}` : ''}
           ${draft.type === 'date' ? `
             <input type="date" class="input" data-date value="${draft.date}" min="${todayKey()}" />
             <div class="hint">Un objetivo puntual solo para ese día.</div>` : ''}
@@ -2566,6 +2789,16 @@ function openGoalEditor(goal, onDone) {
         if (v) { draft.emoji = v; body.querySelectorAll('[data-emoji]').forEach((x) => x.classList.remove('selected')); }
       });
       body.querySelectorAll('[data-type]').forEach((b) => b.addEventListener('click', () => { draft.type = b.dataset.type; api.rerender(); }));
+      body.querySelectorAll('[data-flex-every]').forEach((b) => b.addEventListener('click', () => {
+        draft.flexEvery = b.dataset.flexEvery;
+        if (draft.flexEvery === 'week') draft.flexTimes = Math.min(draft.flexTimes, 7);
+        api.rerender();
+      }));
+      body.querySelectorAll('[data-flex-times]').forEach((b) => b.addEventListener('click', () => {
+        const max = draft.flexEvery === 'week' ? 7 : 31;
+        draft.flexTimes = Math.min(max, Math.max(1, draft.flexTimes + Number(b.dataset.flexTimes)));
+        api.rerender();
+      }));
       body.querySelectorAll('[data-wd]').forEach((b) => b.addEventListener('click', () => {
         const d = Number(b.dataset.wd);
         draft.days = draft.days.includes(d) ? draft.days.filter((x) => x !== d) : [...draft.days, d];
@@ -2584,6 +2817,7 @@ function openGoalEditor(goal, onDone) {
       saveBtn.addEventListener('click', () => {
         const schedule = draft.type === 'daily' ? { type: 'daily' }
           : draft.type === 'weekdays' ? { type: 'weekdays', days: [...draft.days].sort() }
+          : draft.type === 'flex' ? { type: 'flex', every: draft.flexEvery === 'free' ? null : draft.flexEvery, times: draft.flexEvery === 'free' ? null : draft.flexTimes }
           : { type: 'date', date: draft.date };
         const extra = {
           priority: draft.priority,
@@ -2706,7 +2940,7 @@ function openSettingsSheet(onChange) {
         </section>
 
         <button class="btn danger block" data-reset>${icons.trash} Borrar todos los datos</button>
-        <div class="footer-note">GodPole · v2.1</div>`;
+        <div class="footer-note">GodPole · v2.2</div>`;
 
       body.querySelector('[data-name]').addEventListener('change', (e) => { updateSettings({ name: e.target.value.trim() }); onChange && onChange(); });
       body.querySelector('[data-threshold]').addEventListener('change', (e) => { updateSettings({ threshold: Number(e.target.value) }); onChange && onChange(); });
@@ -3170,7 +3404,7 @@ function openFacetEditor(facet, onDone) {
   });
 }
 
-return { scheduleLabel, amountLabel, priorityDots, moodPicker, openGospelSheet, openJournal, openDaySheet, openGoalDetail, openGoalEditor, openSettingsSheet, openQuotesSheet, openAmountSheet, openFacetsSheet, openFacetEditor };
+return { scheduleLabel, flexProgressLabel, flexMet, amountLabel, priorityDots, moodPicker, openGospelSheet, openJournal, openDaySheet, openGoalDetail, openGoalEditor, openSettingsSheet, openQuotesSheet, openAmountSheet, openFacetsSheet, openFacetEditor };
 })();
 // ---- views/home.js ----
 __m['views/home.js'] = (function () {
@@ -3262,8 +3496,8 @@ function render(root, ctx) {
           <div class="ring sm">${ringSvg(52, 6, ratio, ratio >= 1 ? 'var(--success)' : 'var(--accent)')}
             <div class="ring-val">${goals.length ? `${done}/${goals.length}` : hasGoals ? '—' : icons.plus}</div></div>
           <div class="dg-body">
-            <div class="dg-title">${!hasGoals ? 'Crea tu primer objetivo' : goals.length ? (done === goals.length ? '¡Objetivos de hoy cumplidos!' : `${goals.length - done} ${goals.length - done === 1 ? 'objetivo pendiente' : 'objetivos pendientes'}`) : 'Hoy no tienes objetivos'}</div>
-            <div class="dg-sub">${!hasGoals ? 'Diarios o para ciertos días de la semana' : streak ? `🔥 ${streak} ${streak === 1 ? 'día' : 'días'} de racha` : 'Empieza hoy tu racha'}</div>
+            <div class="dg-title">${!hasGoals ? 'Crea tu primer objetivo' : goals.length ? (done === goals.length ? '¡Objetivos de hoy cumplidos!' : `${goals.length - done} ${goals.length - done === 1 ? 'objetivo pendiente' : 'objetivos pendientes'}`) : 'Hoy no tienes objetivos fijos'}</div>
+            <div class="dg-sub">${!hasGoals ? 'Diarios, ciertos días o flexibles' : streak ? `🔥 ${streak} ${streak === 1 ? 'día' : 'días'} de racha` : 'Empieza hoy tu racha'}${dsToday.flexPts ? ` · +${Math.round(dsToday.flexPts * 10) / 10} pts extra` : ''}</div>
           </div>
           <span class="chev">${icons.chevronRight}</span>
         </button>
@@ -3335,11 +3569,11 @@ __m['views/goals.js'] = (function () {
 // Objetivos: marcar los del día (agrupados por faceta), lista de objetivos con su evolución
 // y acceso al detalle y a la gestión de facetas.
 
-const { getState, plannedGoals, getLog, toggleGoal, goalProgress, isQuantity } = __m['store.js'];
+const { getState, plannedGoals, getLog, toggleGoal, goalProgress, isQuantity, isFlex, flexGoals, goalPoints } = __m['store.js'];
 const { todayKey, addDays, startOfWeek, formatLong, fromKey, WEEKDAY_SHORT, capitalize, startOfMonth, endOfMonth, } = __m['dates.js'];
 const { dayStats, goalDayStatus, goalRangeStats, goalStreak, rangeStats } = __m['stats.js'];
 const { esc, icons, ringSvg, toast, confetti, pct } = __m['ui.js'];
-const { openGoalEditor, openGoalDetail, scheduleLabel, openAmountSheet, openFacetsSheet, amountLabel, priorityDots, } = __m['sheets.js'];
+const { openGoalEditor, openGoalDetail, scheduleLabel, openAmountSheet, openFacetsSheet, amountLabel, priorityDots, flexProgressLabel, flexMet, } = __m['sheets.js'];
 
 let selected = todayKey();
 let weekStart = startOfWeek(selected);
@@ -3386,6 +3620,7 @@ function render(root, ctx) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(selected)) resetSelection();
   const log = getLog(selected);
   const planned = plannedGoals(selected);
+  const flexible = flexGoals(selected);
   const dsSel = dayStats(selected);
   const future = selected > today;
   const active = s.goals.filter((g) => !g.archivedAt).sort((a, b) => a.order - b.order);
@@ -3415,6 +3650,22 @@ function render(root, ctx) {
     </button>`;
   };
 
+  // Flexibles: se marcan el día que se hacen; muestran cómo van en su semana/mes
+  const flexRow = (g) => {
+    const f = goalProgress(g, log.done[g.id]);
+    const d = f >= 1;
+    const met = flexMet(g, selected);
+    return `<button class="goal ${d ? 'done' : ''} ${f > 0 && f < 1 ? 'is-partial' : ''}" data-toggle="${g.id}" ${future ? 'disabled' : ''} aria-pressed="${d}">
+      <span class="g-emoji">${esc(g.emoji)}</span>
+      <span class="g-body"><div class="g-title">${esc(g.title)}</div>
+        <div class="g-sub">${priorityDots(g)} <span class="flex-tag ${met ? 'met' : ''}">${met ? '✓ ' : ''}${esc(flexProgressLabel(g, selected))}</span>${d ? ` · +${Math.round(goalPoints(g) * f * 10) / 10} pts` : ''}${isQuantity(g) ? ` ${esc(amountLabel(g, log.done[g.id]))}` : ''}</div></span>
+      <span class="check" style="--f:${f}">${d ? icons.check : f > 0 ? `<small>${Math.round(f * 100)}</small>` : isQuantity(g) ? icons.plus : icons.check}</span>
+    </button>`;
+  };
+  const flexCard = flexible.length ? `
+    <div class="section-row flex-head"><h2 class="section-title">Cuando quieras</h2><span class="meta">${dsSel.flexPts ? `+${Math.round(dsSel.flexPts * 10) / 10} pts extra` : 'Suman puntos extra'}</span></div>
+    <div class="card list-card">${flexible.map(flexRow).join('')}</div>` : '';
+
   let checklist;
   if (planned.length) {
     const body = useGroups
@@ -3426,7 +3677,8 @@ function render(root, ctx) {
       </div>
       ${future ? '<p class="hint center">Podrás marcarlos cuando llegue el día.</p>' : ''}`;
   } else if (active.length) {
-    checklist = `<div class="card empty small"><div class="e-icon">🌿</div><p>No hay objetivos programados para este día.</p></div>`;
+    checklist = flexible.length ? '<p class="hint">Hoy no hay objetivos con día fijo.</p>'
+      : `<div class="card empty small"><div class="e-icon">🌿</div><p>No hay objetivos programados para este día.</p></div>`;
   } else {
     checklist = `<div class="card empty"><div class="e-icon">🎯</div><h3>Crea tu primer objetivo</h3>
       <p>Define lo que quieres cumplir cada día o ciertos días de la semana.</p>
@@ -3436,11 +3688,15 @@ function render(root, ctx) {
   const goalRow = (g) => {
     const m = goalRangeStats(g.id, startOfMonth(today), endOfMonth(today));
     const streak = goalStreak(g.id);
+    // flexibles: en vez del % del mes, cómo van en su semana/mes ("2/3") o cuántas veces este mes (libres)
+    const flex = isFlex(g);
+    const [big, small] = !flex ? [pct(m.rate), 'este mes']
+      : flexProgressLabel(g, today).replace(/^(\S+)\s(.*)$/, '$1|$2').split('|');
     return `<button class="goal-row" data-detail="${g.id}">
       <span class="g-emoji">${esc(g.emoji)}</span>
       <div class="gr-body">
-        <div class="gr-top"><span class="gr-title">${esc(g.title)}</span><span class="gr-pct">${pct(m.rate)}</span></div>
-        <div class="gr-sub"><span>${priorityDots(g)} ${esc(scheduleLabel(g))}${streak ? ` · 🔥 ${streak}` : ''}</span><span class="gr-month">este mes</span></div>
+        <div class="gr-top"><span class="gr-title">${esc(g.title)}</span><span class="gr-pct">${esc(big)}</span></div>
+        <div class="gr-sub"><span>${priorityDots(g)} ${esc(scheduleLabel(g))}${streak ? ` · 🔥 ${streak}` : ''}</span><span class="gr-month">${esc(small)}</span></div>
         <div class="trail" aria-hidden="true">${trail(g.id, today)}</div>
       </div>
       <span class="chev">${icons.chevronRight}</span>
@@ -3479,6 +3735,7 @@ function render(root, ctx) {
         ${planned.length ? `<span class="meta">${dsSel.done} de ${planned.length} · ${pct(dsSel.ratio)}</span>` : ''}
       </div>
       ${checklist}
+      ${flexCard}
     </section>
 
     ${active.length ? `
@@ -3780,7 +4037,7 @@ return { openYearSummary };
 __m['views/progress.js'] = (function () {
 // Progreso: visión general, curva de cumplimiento (con detalle por punto), rueda, ánimo, calendario y diario.
 
-const { getState, getLog, plannedIds, plannedGoals, goalProgress, goalPoints, isQuantity, GOSPEL_BONUS } = __m['store.js'];
+const { getState, getLog, plannedIds, plannedGoals, goalProgress, goalPoints, isQuantity, GOSPEL_BONUS, isFlex } = __m['store.js'];
 const { todayKey, addMonths, startOfMonth, endOfMonth, eachDay, fromKey, formatMonthYear, formatShort, capitalize, WEEK_ORDER, WEEKDAY_SHORT, MONTH_SHORT, diffDays, WEEKDAY_NAMES, minKey, maxKey, formatLong, } = __m['dates.js'];
 const { rangeStats, currentStreak, bestStreak, periodRange, periodSeries, dayStats, goalDayStatus, goalRangeStats, moodSeries, facetStats, totalByYear, } = __m['stats.js'];
 const { lineChart, bindLineCharts, moodChart, radarChart } = __m['charts.js'];
@@ -3826,6 +4083,12 @@ function buildTrend(filter) {
   const empty = { pct: null, pts: null, plan: null };
 
   const rangeVals = (from, to) => {
+    if (goal && isFlex(goal)) {
+      // flexible: % de semanas/meses con la meta cumplida (los libres no tienen %) y puntos extra sumados
+      const r = goalRangeStats(goal.id, from, to);
+      if (!r.count && !r.periods) return empty;
+      return { pct: r.rate == null ? null : r1(r.rate * 100), pts: r1(r.pts), plan: r.planned ? r.planned * goalPoints(goal) : null };
+    }
     if (goal) {
       const r = goalRangeStats(goal.id, from, to);
       const w = goalPoints(goal);
@@ -3841,7 +4104,9 @@ function buildTrend(filter) {
       const label = String(fromKey(k).getDate());
       const title = capitalize(formatLong(k));
       if (k < s.startDate || k > today) { pt(label, title, k, k, empty); continue; }
-      if (goal) {
+      if (goal && isFlex(goal)) {
+        pt(label, title, k, k, rangeVals(startOfMonth(ref), k)); // acumulado del mes hasta ese día
+      } else if (goal) {
         const st = goalDayStatus(goal.id, k);
         const w = goalPoints(goal);
         if (st !== 'off' && st !== 'pending') { cP++; cF += goalProgress(goal, (getLog(k).done || {})[goal.id]); }
@@ -3849,7 +4114,7 @@ function buildTrend(filter) {
       } else {
         const ds = dayStats(k, scope);
         const pendingToday = k === today && ds.ptsDone === 0; // el día en curso no "desploma" la curva
-        pt(label, title, k, k, !ds.pts || pendingToday ? { ...empty, plan: ds.pts || null } : { pct: r1(ds.ratio * 100), pts: r1(ds.ptsDone), plan: ds.pts });
+        pt(label, title, k, k, !ds.pts || pendingToday ? { ...empty, pts: ds.ptsDone ? r1(ds.ptsDone) : null, plan: ds.pts || null } : { pct: r1(ds.ratio * 100), pts: r1(ds.ptsDone), plan: ds.pts });
       }
     }
   } else if (period === 'total' && totalByYear()) {
@@ -3886,6 +4151,7 @@ function summary(filter, from, to) {
   if (filter.startsWith('g:')) {
     const g = s.goals.find((x) => x.id === filter.slice(2));
     const r = goalRangeStats(filter.slice(2), start, end);
+    if (r.flex) return r.count || r.periods ? { rate: r.rate, ptsDay: r.pts / days, pts: r.pts } : null;
     return r.planned ? { rate: r.rate, ptsDay: (r.frac * goalPoints(g)) / days, pts: r.frac * goalPoints(g) } : null;
   }
   const r = rangeStats(start, end, filter.startsWith('f:') ? { facetId: filter.slice(2) } : null);
@@ -3909,7 +4175,7 @@ function detailHtml(point, filter, goalsList) {
   if (!point) return '';
   const today = todayKey();
   const head = `<div class="dt-head"><div><b>${esc(point.title)}</b>
-      <span>${point.pct == null ? 'Sin datos' : `${String(point.pct).replace('.', ',')} % · ${String(point.pts).replace('.', ',')} de ${point.plan} pts${point.pts > point.plan ? ' (con extra)' : ''}`}</span></div>
+      <span>${point.pct == null ? (point.pts ? `+${String(point.pts).replace('.', ',')} pts extra` : 'Sin datos') : `${String(point.pct).replace('.', ',')} % · ${String(point.pts).replace('.', ',')} de ${point.plan} pts${point.pts > point.plan ? ' (con extra)' : ''}`}</span></div>
       ${point.from === point.to && point.from <= today ? `<button class="link-btn" data-day="${point.from}">Ver día</button>` : ''}</div>`;
   if (point.from > today) return `<div class="lc-detail">${head}<p class="muted">Aún no ha llegado.</p></div>`;
 
@@ -3922,7 +4188,15 @@ function detailHtml(point, filter, goalsList) {
         <span class="dt-ico">${log.gospelRead ? '✅' : '·'}</span><span class="dt-emoji">📖</span>
         <span class="dt-name">Evangelio del día<small>Punto extra</small></span>
         <span class="dt-pts">${log.gospelRead ? `+${GOSPEL_BONUS}` : '0'}</span></div>` : '';
-    if (!goals.length) return `<div class="lc-detail">${head}${gospelRow ? `<div class="dt-list">${gospelRow}</div>` : '<p class="muted">No había objetivos ese día.</p>'}</div>`;
+    const planSet = new Set(goals.map((g) => g.id));
+    const flexRows = goalsForFilter(filter, getState().goals.filter((g) => isFlex(g) && !planSet.has(g.id) && (log.done || {})[g.id]))
+      .map((g) => {
+        const f = goalProgress(g, log.done[g.id]);
+        return `<div class="dt-row bonus st-done"><span class="dt-ico">✅</span><span class="dt-emoji">${esc(g.emoji)}</span>
+          <span class="dt-name">${esc(g.title)}<small>Flexible · punto extra</small></span>
+          <span class="dt-pts">+${String(r1(goalPoints(g) * f)).replace('.', ',')}</span></div>`;
+      }).join('');
+    if (!goals.length) return `<div class="lc-detail">${head}${gospelRow || flexRows ? `<div class="dt-list">${flexRows}${gospelRow}</div>` : '<p class="muted">No había objetivos ese día.</p>'}</div>`;
     const rows = goals.map((g) => {
       const f = goalProgress(g, (log.done || {})[g.id]);
       const st = f >= 1 ? 'done' : f > 0 ? 'partial' : k === today ? 'pending' : 'missed';
@@ -3934,13 +4208,18 @@ function detailHtml(point, filter, goalsList) {
         <span class="dt-pts">${String(r1(w * f)).replace('.', ',')}/${w}</span>
       </div>`;
     }).join('');
-    return `<div class="lc-detail">${head}<div class="dt-list">${rows}${gospelRow}</div></div>`;
+    return `<div class="lc-detail">${head}<div class="dt-list">${rows}${flexRows}${gospelRow}</div></div>`;
   }
 
-  const rows = goalsForFilter(filter, goalsList)
-    .map((g) => ({ g, ...goalRangeStats(g.id, point.from, point.to) }))
-    .filter((x) => x.planned > 0)
-    .sort((a, b) => (b.rate - a.rate) || (b.done - a.done));
+  const all = goalsForFilter(filter, goalsList).map((g) => ({ g, ...goalRangeStats(g.id, point.from, point.to) }));
+  const rows = all.filter((x) => !x.flex && x.planned > 0).sort((a, b) => (b.rate - a.rate) || (b.done - a.done));
+  const unitOf = (x) => (x.every === 'week' ? ['semana', 'semanas'] : ['mes', 'meses']);
+  const flexRange = all.filter((x) => x.flex && (x.count > 0 || x.periods > 0)).map((x) => `
+    <button class="dt-row range bonus" data-goal-filter="g:${x.g.id}">
+      <span class="dt-emoji">${esc(x.g.emoji)}</span>
+      <span class="dt-name">${esc(x.g.title)}<small>${x.every ? `${x.periodsMet}/${x.periods} ${x.periods === 1 ? unitOf(x)[0] : unitOf(x)[1]} con la meta · ` : 'Libre · '}${String(r1(x.count)).replace('.', ',')} ${x.count === 1 ? 'vez' : 'veces'} · +${String(r1(x.pts)).replace('.', ',')} pts</small>${x.every ? `<i class="dt-bar"><em style="width:${(x.rate || 0) * 100}%"></em></i>` : ''}</span>
+      <span class="dt-pts"><b>${x.every ? `${Math.round((x.rate || 0) * 100)}%` : `${String(r1(x.count)).replace('.', ',')}×`}</b><small>${x.every ? 'cumplido' : 'hecho'}</small></span>
+    </button>`).join('');
   const rs = filter === 'all' ? rangeStats(point.from, point.to) : null;
   const gospelRange = rs && rs.days ? `
     <div class="dt-row range bonus">
@@ -3948,13 +4227,13 @@ function detailHtml(point, filter, goalsList) {
       <span class="dt-name">Evangelio leído<small>Punto extra · +${rs.gospelDays * GOSPEL_BONUS} ${rs.gospelDays * GOSPEL_BONUS === 1 ? "pt" : "pts"}</small><i class="dt-bar"><em style="width:${(rs.gospelDays / rs.days) * 100}%"></em></i></span>
       <span class="dt-pts"><b>${Math.round((rs.gospelDays / rs.days) * 100)}%</b><small>${rs.gospelDays}/${rs.days} días</small></span>
     </div>` : '';
-  if (!rows.length && !gospelRange) return `<div class="lc-detail">${head}<p class="muted">Sin objetivos en este periodo.</p></div>`;
+  if (!rows.length && !gospelRange && !flexRange) return `<div class="lc-detail">${head}<p class="muted">Sin objetivos en este periodo.</p></div>`;
   return `<div class="lc-detail">${head}<div class="dt-list">${rows.map((x) => `
     <button class="dt-row range" data-goal-filter="g:${x.g.id}">
       <span class="dt-emoji">${esc(x.g.emoji)}</span>
       <span class="dt-name">${esc(x.g.title)}<i class="dt-bar"><em style="width:${(x.rate || 0) * 100}%"></em></i></span>
       <span class="dt-pts"><b>${Math.round((x.rate || 0) * 100)}%</b><small>${x.done}/${x.planned}</small></span>
-    </button>`).join('')}${gospelRange}</div></div>`;
+    </button>`).join('')}${flexRange}${gospelRange}</div></div>`;
 }
 
 function goalsInRange(from, to) {
@@ -4005,6 +4284,8 @@ function render(root, ctx) {
   const ff = goalFilter.startsWith('f:') ? (facets.find((f) => f.id === goalFilter.slice(2)) || { id: '__none', name: 'Sin faceta', emoji: '📌', color: '#94a3b8' }) : null;
   // faceta "activa" para la segunda fila de chips (la del objetivo elegido, si lo hay)
   const scopeFacet = ff ? ff.id : fg ? (fg.facetId || null) : null;
+  // Un objetivo libre no tiene % (no hay meta): se muestran directamente sus puntos
+  if (fg && isFlex(fg) && !fg.schedule.every) metric = 'pts';
   const cur = summary(goalFilter, from, to);
   let compare = '';
   let lineColor = ff ? ff.color : 'var(--success)';
@@ -4014,11 +4295,11 @@ function render(root, ctx) {
     const prev = summary(goalFilter, prevFrom, prevTo);
     const prevName = period === 'month' ? formatMonthYear(prevFrom).split(' ')[0] : prevFrom.slice(0, 4);
     if (prev) {
-      if (metric === 'pct') {
+      if (metric === 'pct' && cur.rate != null && prev.rate != null) {
         const d = Math.round((cur.rate - prev.rate) * 100);
         if (d < 0) lineColor = 'var(--miss)';
         compare = `<div class="th-delta ${d >= 0 ? 'up' : 'down'}">${d >= 0 ? '▲' : '▼'} ${Math.abs(d)} p.p. <span>vs ${esc(prevName)}</span></div>`;
-      } else if (prev.ptsDay) {
+      } else if (metric === 'pts' && prev.ptsDay) {
         const d = (cur.ptsDay - prev.ptsDay) / prev.ptsDay;
         if (d < 0) lineColor = 'var(--miss)';
         compare = `<div class="th-delta ${d >= 0 ? 'up' : 'down'}">${d >= 0 ? '▲' : '▼'} ${Math.abs(Math.round(d * 100))}% <span>vs ${esc(prevName)}</span></div>`;
@@ -4031,7 +4312,7 @@ function render(root, ctx) {
   const wheel = facetStats(from, to).filter((x) => x.pts > 0);
   // punto seleccionado por defecto: el último con datos (hoy o el mes en curso)
   let sel = -1;
-  trend.forEach((p, i) => { if (p.pct != null) sel = i; });
+  trend.forEach((p, i) => { if ((metric === 'pct' ? p.pct : p.pts) != null) sel = i; });
   if (sel < 0) sel = trend.length - 1;
   const chartPoints = trend.map((p) => (metric === 'pct'
     ? { label: p.label, title: p.title, value: p.pct, planned: null }
@@ -4039,7 +4320,7 @@ function render(root, ctx) {
   const trendHtml = goals.length ? lineChart(chartPoints, metric === 'pct'
     ? { unit: '%', color: lineColor, max: 100, threshold: thr * 100, suffix: '%', selected: sel }
     : { unit: 'pts', color: lineColor, selected: sel }) : '';
-  const bigVal = !cur ? '—' : metric === 'pct' ? `${Math.round(cur.rate * 100)}<small> %</small>` : `${String(r1(cur.pts)).replace('.', ',')}<small> pts</small>`;
+  const bigVal = !cur ? '—' : metric === 'pct' ? (cur.rate == null ? '—' : `${Math.round(cur.rate * 100)}<small> %</small>`) : `${String(r1(cur.pts)).replace('.', ',')}<small> pts</small>`;
   const when = period === 'month' ? 'este mes' : period === 'year' ? 'este año' : 'en total';
 
   // 3) ánimo
