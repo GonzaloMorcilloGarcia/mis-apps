@@ -4,7 +4,7 @@
 // Si cambias archivos y quieres forzar la actualización, sube el número de versión.
 
 const PREFIX = 'godpole-';
-const VERSION = PREFIX + 'v11';
+const VERSION = PREFIX + 'v12';
 const ASSETS = [
   './',
   './index.html',

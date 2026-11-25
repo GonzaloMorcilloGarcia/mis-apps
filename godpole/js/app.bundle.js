@@ -1197,6 +1197,12 @@ function moodFor(v) {
   return MOODS[Math.min(4, Math.max(0, Math.round(v) - 1))];
 }
 
+/** Puntos con coma decimal y sin decimales innecesarios: 12 · 12,5 */
+function fmtPts(n) {
+  const r = Math.round((n || 0) * 10) / 10;
+  return String(r).replace('.', ',');
+}
+
 function pct(r) {
   return r == null ? '—' : `${Math.round(r * 100)}%`;
 }
@@ -1388,7 +1394,7 @@ function confirmDialog(message) {
   return window.confirm(message);
 }
 
-return { applyTheme, esc, icons, MOODS, moodFor, pct, heatClass, ringSvg, openSheet, closeAllSheets, toast, confetti, confirmDialog };
+return { applyTheme, esc, icons, MOODS, moodFor, fmtPts, pct, heatClass, ringSvg, openSheet, closeAllSheets, toast, confetti, confirmDialog };
 })();
 // ---- stats.js ----
 __m['stats.js'] = (function () {
@@ -1943,7 +1949,10 @@ function showLabel(i, n, every) {
  * Diagrama de barras de cumplimiento.
  * items: [{ label, value: 0..1 | null, today?: bool, future?: bool }]
  */
-function barChart(items, { threshold = 0.8, height = 180 } = {}) {
+function barChart(items, { threshold = 0.8, height = 180, points = false } = {}) {
+  // points: los valores son puntos; se escalan respecto al máximo y no hay umbral
+  const maxPts = points ? Math.max(1, ...items.map((it) => it.value || 0)) : 1;
+  if (points) items = items.map((it) => ({ ...it, pts: it.value, value: it.value == null ? null : it.value / maxPts }));
   const n = items.length || 1;
   const left = 30, right = 4, top = 14, bottom = 26;
   const pw = W - left - right;
@@ -1957,10 +1966,11 @@ function barChart(items, { threshold = 0.8, height = 180 } = {}) {
   // rejilla
   for (const v of [0, 0.5, 1]) {
     g += `<line x1="${left}" x2="${W - right}" y1="${y(v)}" y2="${y(v)}" stroke="var(--grid)" stroke-width="1"/>`;
-    g += `<text x="${left - 6}" y="${y(v) + 3.5}" text-anchor="end" class="ax">${Math.round(v * 100)}${v === 1 ? '%' : ''}</text>`;
+    const lbl = points ? Math.round(v * maxPts) : `${Math.round(v * 100)}${v === 1 ? '%' : ''}`;
+    g += `<text x="${left - 6}" y="${y(v) + 3.5}" text-anchor="end" class="ax">${lbl}</text>`;
   }
-  // umbral
-  g += `<line x1="${left}" x2="${W - right}" y1="${y(threshold)}" y2="${y(threshold)}" stroke="var(--gold)" stroke-width="1.2" stroke-dasharray="4 4" opacity=".9"/>`;
+  // umbral (solo en %)
+  if (!points) g += `<line x1="${left}" x2="${W - right}" y1="${y(threshold)}" y2="${y(threshold)}" stroke="var(--gold)" stroke-width="1.2" stroke-dasharray="4 4" opacity=".9"/>`;
 
   items.forEach((it, i) => {
     const cx = left + slot * i + slot / 2;
@@ -1972,10 +1982,11 @@ function barChart(items, { threshold = 0.8, height = 180 } = {}) {
       if (!it.future) g += `<rect x="${cx - bw / 2}" y="${y(0) - 2}" width="${bw}" height="2" rx="1" fill="var(--surface-3)"/>`;
     } else {
       const h = Math.max(2, ph * it.value);
-      const color = it.value >= threshold - 1e-9 ? 'var(--success)' : 'var(--accent)';
+      const color = points ? 'var(--accent)' : it.value >= threshold - 1e-9 ? 'var(--success)' : 'var(--accent)';
+      const txt = points ? String(Math.round(it.pts * 10) / 10).replace('.', ',') : String(Math.round(it.value * 100));
       g += `<rect x="${cx - bw / 2}" y="${y(0) - h}" width="${bw}" height="${h}" rx="${Math.min(4, bw / 2)}" fill="${color}">
-        <title>${esc(it.title || it.label)}: ${Math.round(it.value * 100)}%</title></rect>`;
-      if (n <= 12) g += `<text x="${cx}" y="${y(0) - h - 4}" text-anchor="middle" class="val">${Math.round(it.value * 100)}</text>`;
+        <title>${esc(it.title || it.label)}: ${txt}${points ? ' pts' : '%'}</title></rect>`;
+      if (n <= 12) g += `<text x="${cx}" y="${y(0) - h - 4}" text-anchor="middle" class="val">${txt}</text>`;
     }
     if (showLabel(i, n, every)) {
       g += `<text x="${cx}" y="${height - 8}" text-anchor="middle" class="ax ${it.today ? 'ax-today' : ''}">${esc(it.label)}</text>`;
@@ -2275,11 +2286,11 @@ function radarChart(axes) {
   g += `<polygon points="${shape}" fill="var(--accent)" fill-opacity=".22" stroke="var(--accent)" stroke-width="2.2" stroke-linejoin="round"/>`;
   axes.forEach((a, i) => {
     const [x, y] = pt(i, R * Math.max(0.04, Math.min(1, a.value)));
-    g += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="5" fill="${a.color}" stroke="var(--surface)" stroke-width="2"><title>${esc(a.label)}: ${Math.round(a.value * 100)}%</title></circle>`;
+    g += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="5" fill="${a.color}" stroke="var(--surface)" stroke-width="2"><title>${esc(a.label)}: ${a.text ?? `${Math.round(a.value * 100)}%`}</title></circle>`;
     const [lx, ly] = pt(i, R + 26);
     const anchor = Math.abs(lx - cx) < 8 ? 'middle' : lx > cx ? 'start' : 'end';
     g += `<text x="${lx.toFixed(1)}" y="${(ly - 2).toFixed(1)}" text-anchor="${anchor}" class="rd-lbl">${esc(a.emoji)} ${esc(a.label.length > 12 ? a.label.slice(0, 11) + '…' : a.label)}</text>`;
-    g += `<text x="${lx.toFixed(1)}" y="${(ly + 12).toFixed(1)}" text-anchor="${anchor}" class="rd-val" fill="${a.color}">${Math.round(a.value * 100)}%</text>`;
+    g += `<text x="${lx.toFixed(1)}" y="${(ly + 12).toFixed(1)}" text-anchor="${anchor}" class="rd-val" fill="${a.color}">${a.text ?? `${Math.round(a.value * 100)}%`}</text>`;
   });
   return `<svg class="chart radar" viewBox="0 0 ${W} ${size + 8}" role="img" aria-label="Rueda de tu vida: cumplimiento por faceta">${g}</svg>`;
 }
@@ -2300,7 +2311,7 @@ const { todayKey, formatShort, formatLong, formatMonthYear, addMonths, startOfMo
 const { getGospel, getCachedGospel, SOURCES, testConnector, clearGospelCache, DEFAULT_CONNECTOR } = __m['gospel.js'];
 const { goalDayStatus, goalRangeStats, goalStreak, goalBestStreak, flexNow } = __m['stats.js'];
 const { barChart } = __m['charts.js'];
-const { esc, icons, openSheet, toast, MOODS, moodFor, pct, confirmDialog, applyTheme } = __m['ui.js'];
+const { esc, icons, openSheet, toast, MOODS, moodFor, pct, confirmDialog, applyTheme, fmtPts } = __m['ui.js'];
 
 // ======================================================================
 // Utilidades
@@ -2587,13 +2598,13 @@ function openGoalDetail(goalId, onChange) {
       const veces = (n) => `${fmtN(n)} ${n === 1 ? 'vez' : 'veces'}`;
       const now = flex ? flexNow(goal, today) : null;
       const stats = !flex ? `
-          <div class="stat"><div class="s-val">${pct(month.rate)}</div><div class="s-lbl">Este mes</div><div class="s-sub">${month.done} de ${month.planned} días</div></div>
-          <div class="stat"><div class="s-val">${pct(year.rate)}</div><div class="s-lbl">Este año</div><div class="s-sub">${year.done} de ${year.planned} días</div></div>
+          <div class="stat"><div class="s-val">${fmtPts(month.frac * goalPoints(goal))}<small> pts</small></div><div class="s-lbl">Este mes</div><div class="s-sub">${month.done} de ${month.planned} días</div></div>
+          <div class="stat"><div class="s-val">${fmtPts(year.frac * goalPoints(goal))}<small> pts</small></div><div class="s-lbl">Este año</div><div class="s-sub">${year.done} de ${year.planned} días</div></div>
           <div class="stat"><div class="s-val">🔥 ${streak}</div><div class="s-lbl">Racha actual</div><div class="s-sub">Mejor: ${best} ${best === 1 ? 'día' : 'días'}</div></div>
-          <div class="stat"><div class="s-val">${all.done}</div><div class="s-lbl">Veces cumplido</div><div class="s-sub">${pct(all.rate)} desde el inicio</div></div>`
+          <div class="stat"><div class="s-val">${all.done}</div><div class="s-lbl">Veces cumplido</div><div class="s-sub">${fmtPts(all.frac * goalPoints(goal))} pts desde el inicio</div></div>`
         : every ? `
           <div class="stat"><div class="s-val">${fmtN(now.count)}/${now.times}</div><div class="s-lbl">${every === 'week' ? 'Esta semana' : 'Este mes'}</div><div class="s-sub">${now.count >= now.times ? '¡Meta cumplida!' : `Faltan ${fmtN(now.times - now.count)}`}</div></div>
-          <div class="stat"><div class="s-val">${pct(year.rate)}</div><div class="s-lbl">Este año</div><div class="s-sub">${year.periodsMet} de ${year.periods} ${unitP[1]} cumplidas</div></div>
+          <div class="stat"><div class="s-val">+${fmtN(year.pts)}<small> pts</small></div><div class="s-lbl">Este año</div><div class="s-sub">${year.periodsMet} de ${year.periods} ${unitP[1]} con la meta</div></div>
           <div class="stat"><div class="s-val">🔥 ${streak}</div><div class="s-lbl">Racha actual</div><div class="s-sub">Mejor: ${best} ${best === 1 ? unitP[0] : unitP[1]}</div></div>
           <div class="stat"><div class="s-val">${fmtN(all.count)}</div><div class="s-lbl">Veces hecho</div><div class="s-sub">+${fmtN(all.pts)} pts en total</div></div>`
         : `
@@ -2604,7 +2615,8 @@ function openGoalDetail(goalId, onChange) {
       const bars = MONTH_SHORT.map((mm, i) => {
         const m0 = `${yr}-${String(i + 1).padStart(2, '0')}-01`;
         const r = goalRangeStats(goalId, m0, endOfMonth(m0));
-        return { label: mm.charAt(0).toUpperCase(), title: mm, value: r.rate, today: m0 === startOfMonth(today), future: m0 > today };
+        const pts = r.flex ? r.pts : r.frac * goalPoints(goal);
+        return { label: mm.charAt(0).toUpperCase(), title: mm, value: m0 > today || (!r.planned && !pts) ? null : pts, today: m0 === startOfMonth(today), future: m0 > today };
       });
 
       body.innerHTML = `
@@ -2642,10 +2654,10 @@ function openGoalDetail(goalId, onChange) {
           </div>
         </section>
 
-        ${flex && !every ? '' : `<section class="card">
-          <div class="card-head left"><h3>Año ${yr}</h3><span class="muted">${every ? `% de ${unitP[1]} cumplidas` : '% de días cumplidos'}</span></div>
-          ${barChart(bars, { threshold: s.settings.threshold, height: 170 })}
-        </section>`}`;
+        <section class="card">
+          <div class="card-head left"><h3>Año ${yr}</h3><span class="muted">Puntos por mes</span></div>
+          ${barChart(bars, { points: true, height: 170 })}
+        </section>`;
 
       body.querySelector('[data-edit]').addEventListener('click', () => openGoalEditor(goal, () => { onChange && onChange(); api.rerender(); }));
       body.querySelectorAll('[data-nav]').forEach((b) => b.addEventListener('click', () => {
@@ -2940,7 +2952,7 @@ function openSettingsSheet(onChange) {
         </section>
 
         <button class="btn danger block" data-reset>${icons.trash} Borrar todos los datos</button>
-        <div class="footer-note">GodPole · v2.2</div>`;
+        <div class="footer-note">GodPole · v2.3</div>`;
 
       body.querySelector('[data-name]').addEventListener('change', (e) => { updateSettings({ name: e.target.value.trim() }); onChange && onChange(); });
       body.querySelector('[data-threshold]').addEventListener('change', (e) => { updateSettings({ threshold: Number(e.target.value) }); onChange && onChange(); });
@@ -3572,7 +3584,7 @@ __m['views/goals.js'] = (function () {
 const { getState, plannedGoals, getLog, toggleGoal, goalProgress, isQuantity, isFlex, flexGoals, goalPoints } = __m['store.js'];
 const { todayKey, addDays, startOfWeek, formatLong, fromKey, WEEKDAY_SHORT, capitalize, startOfMonth, endOfMonth, } = __m['dates.js'];
 const { dayStats, goalDayStatus, goalRangeStats, goalStreak, rangeStats } = __m['stats.js'];
-const { esc, icons, ringSvg, toast, confetti, pct } = __m['ui.js'];
+const { esc, icons, ringSvg, toast, confetti, pct, fmtPts } = __m['ui.js'];
 const { openGoalEditor, openGoalDetail, scheduleLabel, openAmountSheet, openFacetsSheet, amountLabel, priorityDots, flexProgressLabel, flexMet, } = __m['sheets.js'];
 
 let selected = todayKey();
@@ -3690,7 +3702,7 @@ function render(root, ctx) {
     const streak = goalStreak(g.id);
     // flexibles: en vez del % del mes, cómo van en su semana/mes ("2/3") o cuántas veces este mes (libres)
     const flex = isFlex(g);
-    const [big, small] = !flex ? [pct(m.rate), 'este mes']
+    const [big, small] = !flex ? [`${fmtPts(m.frac * goalPoints(g))} pts`, 'este mes']
       : flexProgressLabel(g, today).replace(/^(\S+)\s(.*)$/, '$1|$2').split('|');
     return `<button class="goal-row" data-detail="${g.id}">
       <span class="g-emoji">${esc(g.emoji)}</span>
@@ -3707,7 +3719,7 @@ function render(root, ctx) {
     ? groupByFacet(active).map((gr) => {
       const id = gr.facet ? gr.facet.id : '__none';
       const r = rangeStats(startOfMonth(today), endOfMonth(today), { facetId: id });
-      return `<div class="card list-card facet-card">${facetHeader(gr.facet, `<span class="fh-pct">${pct(r.rate)}</span>`)}${gr.goals.map(goalRow).join('')}</div>`;
+      return `<div class="card list-card facet-card">${facetHeader(gr.facet, `<span class="fh-pct">${fmtPts(r.ptsDone)} pts</span>`)}${gr.goals.map(goalRow).join('')}</div>`;
     }).join('')
     : `<div class="card list-card">${active.map(goalRow).join('')}</div>`;
 
@@ -3732,7 +3744,7 @@ function render(root, ctx) {
     <section class="section">
       <div class="section-row">
         <h2 class="section-title">${selected === today ? 'Para hoy' : 'Ese día'}</h2>
-        ${planned.length ? `<span class="meta">${dsSel.done} de ${planned.length} · ${pct(dsSel.ratio)}</span>` : ''}
+        ${planned.length ? `<span class="meta">${dsSel.done} de ${planned.length} · ${fmtPts(dsSel.ptsDone)} de ${fmtPts(dsSel.pts)} pts</span>` : ''}
       </div>
       ${checklist}
       ${flexCard}
@@ -3850,9 +3862,11 @@ function computeYear(year) {
   }
 
   // objetivo estrella (constancia, con un mínimo de días)
-  const goals = s.goals.map((g) => ({ g, ...goalRangeStats(g.id, from, to) })).filter((x) => x.planned >= 5);
+  const goals = s.goals.map((g) => ({ g, ...goalRangeStats(g.id, from, to) })).filter((x) => x.planned >= 5 || (x.flex && x.count > 0));
   // la estrella pondera constancia × importancia (prioridad), para que destaquen los objetivos importantes
-  const star = goals.sort((a, b) => (b.rate * goalPoints(b.g) - a.rate * goalPoints(a.g)) || (b.done - a.done))[0] || null;
+  goals.forEach((x) => { x.ptsWon = x.flex ? x.pts : x.frac * goalPoints(x.g); });
+  // la estrella: el objetivo que más puntos te dio en el año
+  const star = goals.sort((a, b) => (b.ptsWon - a.ptsWon) || (b.done - a.done))[0] || null;
   const most = s.goals.map((g) => ({ g, ...goalRangeStats(g.id, from, to) })).sort((a, b) => b.done - a.done)[0] || null;
 
   // meses
@@ -3861,12 +3875,12 @@ function computeYear(year) {
     const m0 = `${year}-${String(m + 1).padStart(2, '0')}-01`;
     if (m0 > to || endOfMonth(m0) < from) continue;
     const r = rangeStats(m0, endOfMonth(m0));
-    months.push({ m, rate: r.rate, mood: r.moodAvg, moodCount: r.moodCount });
+    months.push({ m, rate: r.rate, pts: r.ptsDone, mood: r.moodAvg, moodCount: r.moodCount });
   }
-  const bestMonth = months.filter((x) => x.rate != null).sort((a, b) => b.rate - a.rate)[0] || null;
+  const bestMonth = months.filter((x) => x.pts > 0).sort((a, b) => b.pts - a.pts)[0] || null;
   const happyMonth = months.filter((x) => x.moodCount >= 3).sort((a, b) => b.mood - a.mood)[0] || null;
 
-  const facets = facetStats(from, to).filter((x) => x.pts > 0 && x.facet.id !== '__none').sort((a, b) => b.rate - a.rate);
+  const facets = facetStats(from, to).filter((x) => (x.pts > 0 || x.ptsDone > 0) && x.facet.id !== '__none').sort((a, b) => b.ptsDone - a.ptsDone);
 
   const mine = s.quotes.filter((q) => q.mine);
   const quote = mine.length ? mine[Math.floor(Math.random() * mine.length)] : quoteFor(to, s.quotes);
@@ -3880,7 +3894,7 @@ function computeYear(year) {
 
 function slidesFor(d) {
   const S = [];
-  const pctS = (r) => (r == null ? '—' : `${Math.round(r * 100)}%`);
+  const ptsS = (n) => `${String(Math.round((n || 0) * 10) / 10).replace('.', ',')} pts`;
   S.push({ bg: 'g1', html: `
     <div class="ws-kicker">${d.partial ? 'Hasta hoy' : 'Tu resumen'}</div>
     <h1 class="ws-title">${esc(d.name || 'Tu')}${d.name ? ',' : ''} este es tu <span>${d.year}</span> con Dios</h1>
@@ -3902,9 +3916,9 @@ function slidesFor(d) {
     </div>` });
 
   S.push({ bg: 'g3', html: `
-    <div class="ws-kicker">Constancia</div>
-    <div class="ws-big">${pctS(d.st.rate)}</div>
-    <h2 class="ws-h">de tus objetivos cumplidos</h2>
+    <div class="ws-kicker">Tus puntos</div>
+    <div class="ws-big">${ptsS(d.st.ptsDone)}</div>
+    <h2 class="ws-h">conseguidos este año${d.st.bonus ? ` (+${ptsS(d.st.bonus)} extra)` : ''}</h2>
     <div class="ws-stats">
       <div><b>${d.st.achievedDays}</b><span>días logrados</span></div>
       <div><b>${d.st.perfectDays}</b><span>días perfectos</span></div>
@@ -3916,7 +3930,7 @@ function slidesFor(d) {
       <div class="ws-kicker">Tu objetivo estrella</div>
       <div class="ws-emoji">${esc(d.star.g.emoji)}</div>
       <h2 class="ws-h">${esc(d.star.g.title)}</h2>
-      <p class="ws-text">Lo cumpliste el <b>${pctS(d.star.rate)}</b> de las veces que tocaba${d.star.done ? ` (${d.star.done} ${d.star.done === 1 ? 'vez' : 'veces'})` : ''}.</p>
+      <p class="ws-text">Te dio <b>${ptsS(d.star.ptsWon)}</b>${d.star.done ? ` (${d.star.done} ${d.star.done === 1 ? 'vez' : 'veces'})` : ''}.</p>
       ${d.most && d.most.g.id !== d.star.g.id && d.most.done ? `<p class="ws-sub">El que más veces cumpliste: ${esc(d.most.g.emoji)} ${esc(d.most.g.title)} · ${d.most.done} veces</p>` : ''}` });
   }
 
@@ -3927,8 +3941,8 @@ function slidesFor(d) {
       <div class="ws-kicker">Las facetas de tu vida</div>
       <div class="ws-emoji">${esc(top.facet.emoji)}</div>
       <h2 class="ws-h">${esc(top.facet.name)} fue tu faceta más fuerte</h2>
-      <p class="ws-text">${pctS(top.rate)} de cumplimiento.</p>
-      <div class="ws-bars">${d.facets.map((x) => `<div class="wsb"><span>${esc(x.facet.emoji)} ${esc(x.facet.name)}</span><i><em style="width:${(x.rate || 0) * 100}%;background:${x.facet.color}"></em></i><b>${pctS(x.rate)}</b></div>`).join('')}</div>
+      <p class="ws-text">${ptsS(top.ptsDone)} conseguidos.</p>
+      <div class="ws-bars">${d.facets.map((x) => `<div class="wsb"><span>${esc(x.facet.emoji)} ${esc(x.facet.name)}</span><i><em style="width:${(x.ptsDone / Math.max(1, top.ptsDone)) * 100}%;background:${x.facet.color}"></em></i><b>${ptsS(x.ptsDone)}</b></div>`).join('')}</div>
       ${low && low.facet.id !== top.facet.id ? `<p class="ws-sub">Para el año que viene: cuida un poco más <b>${esc(low.facet.emoji)} ${esc(low.facet.name)}</b>.</p>` : ''}` });
   }
 
@@ -3936,7 +3950,7 @@ function slidesFor(d) {
     const hm = d.happyMonth ? moodFor(d.happyMonth.mood) : null;
     S.push({ bg: 'g6', html: `
       <div class="ws-kicker">Tus mejores meses</div>
-      ${d.bestMonth ? `<h2 class="ws-h">${capitalize(MONTH_NAMES[d.bestMonth.m])}</h2><p class="ws-text">fue tu mes más constante: <b>${pctS(d.bestMonth.rate)}</b>.</p>` : ''}
+      ${d.bestMonth ? `<h2 class="ws-h">${capitalize(MONTH_NAMES[d.bestMonth.m])}</h2><p class="ws-text">fue tu mes con más puntos: <b>${ptsS(d.bestMonth.pts)}</b>.</p>` : ''}
       ${d.happyMonth ? `<div class="ws-emoji">${hm.emoji}</div><p class="ws-text">${d.bestMonth && d.bestMonth.m === d.happyMonth.m ? 'Y también' : 'Tu mes más feliz fue'} <b>${MONTH_NAMES[d.happyMonth.m]}</b>${d.bestMonth && d.bestMonth.m === d.happyMonth.m ? ' tu mes más feliz' : ''}, con un ánimo medio de <b>${d.happyMonth.mood.toFixed(1).replace('.', ',')}</b>.</p>` : ''}
       ${d.st.moodAvg ? `<p class="ws-sub">Ánimo medio del año: ${moodFor(d.st.moodAvg).emoji} ${d.st.moodAvg.toFixed(1).replace('.', ',')}</p>` : ''}` });
   }
@@ -3970,7 +3984,7 @@ function shareText(d) {
   const lines = [
     `Mi ${d.year} con Dios (GodPole)`,
     `📅 ${d.used} días · ✅ ${d.st.done} objetivos cumplidos`,
-    `📈 ${d.st.rate == null ? '—' : Math.round(d.st.rate * 100) + '%'} de constancia · 🔥 mejor racha ${d.best} días`,
+    `⭐ ${String(Math.round(d.st.ptsDone * 10) / 10).replace('.', ',')} puntos · 🔥 mejor racha ${d.best} días`,
     `📖 ${d.st.gospelDays} días leyendo el Evangelio`,
   ];
   if (d.star) lines.push(`⭐ Objetivo estrella: ${d.star.g.emoji} ${d.star.g.title}`);
@@ -4041,7 +4055,7 @@ const { getState, getLog, plannedIds, plannedGoals, goalProgress, goalPoints, is
 const { todayKey, addMonths, startOfMonth, endOfMonth, eachDay, fromKey, formatMonthYear, formatShort, capitalize, WEEK_ORDER, WEEKDAY_SHORT, MONTH_SHORT, diffDays, WEEKDAY_NAMES, minKey, maxKey, formatLong, } = __m['dates.js'];
 const { rangeStats, currentStreak, bestStreak, periodRange, periodSeries, dayStats, goalDayStatus, goalRangeStats, moodSeries, facetStats, totalByYear, } = __m['stats.js'];
 const { lineChart, bindLineCharts, moodChart, radarChart } = __m['charts.js'];
-const { esc, icons, MOODS, moodFor, pct, ringSvg } = __m['ui.js'];
+const { esc, icons, MOODS, moodFor, pct, ringSvg, fmtPts } = __m['ui.js'];
 const { openYearSummary } = __m['wrapped.js'];
 const { openDaySheet, openFacetsSheet, amountLabel } = __m['sheets.js'];
 
@@ -4051,7 +4065,8 @@ if (!PERIODS.some(([p]) => p === period)) period = 'month';
 let ref = todayKey();
 let calRef = todayKey();
 let goalFilter = 'all';
-let metric = localStorage.getItem('godpole.metric') === 'pts' ? 'pts' : 'pct';
+// El análisis se hace siempre en puntos (no en %): los flexibles y el Evangelio suman sin tope.
+let metric = 'pts';
 
 const MONTH_LETTER = ['E', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
 
@@ -4175,7 +4190,7 @@ function detailHtml(point, filter, goalsList) {
   if (!point) return '';
   const today = todayKey();
   const head = `<div class="dt-head"><div><b>${esc(point.title)}</b>
-      <span>${point.pct == null ? (point.pts ? `+${String(point.pts).replace('.', ',')} pts extra` : 'Sin datos') : `${String(point.pct).replace('.', ',')} % · ${String(point.pts).replace('.', ',')} de ${point.plan} pts${point.pts > point.plan ? ' (con extra)' : ''}`}</span></div>
+      <span>${point.pts == null ? 'Sin datos' : `${fmtPts(point.pts)} pts${point.plan ? ` · ${fmtPts(point.plan)} previstos${point.pts > point.plan ? ' (con extra)' : ''}` : ' extra'}`}</span></div>
       ${point.from === point.to && point.from <= today ? `<button class="link-btn" data-day="${point.from}">Ver día</button>` : ''}</div>`;
   if (point.from > today) return `<div class="lc-detail">${head}<p class="muted">Aún no ha llegado.</p></div>`;
 
@@ -4218,21 +4233,21 @@ function detailHtml(point, filter, goalsList) {
     <button class="dt-row range bonus" data-goal-filter="g:${x.g.id}">
       <span class="dt-emoji">${esc(x.g.emoji)}</span>
       <span class="dt-name">${esc(x.g.title)}<small>${x.every ? `${x.periodsMet}/${x.periods} ${x.periods === 1 ? unitOf(x)[0] : unitOf(x)[1]} con la meta · ` : 'Libre · '}${String(r1(x.count)).replace('.', ',')} ${x.count === 1 ? 'vez' : 'veces'} · +${String(r1(x.pts)).replace('.', ',')} pts</small>${x.every ? `<i class="dt-bar"><em style="width:${(x.rate || 0) * 100}%"></em></i>` : ''}</span>
-      <span class="dt-pts"><b>${x.every ? `${Math.round((x.rate || 0) * 100)}%` : `${String(r1(x.count)).replace('.', ',')}×`}</b><small>${x.every ? 'cumplido' : 'hecho'}</small></span>
+      <span class="dt-pts"><b>+${fmtPts(x.pts)} pts</b><small>${fmtPts(x.count)} ${x.count === 1 ? 'vez' : 'veces'}</small></span>
     </button>`).join('');
   const rs = filter === 'all' ? rangeStats(point.from, point.to) : null;
   const gospelRange = rs && rs.days ? `
     <div class="dt-row range bonus">
       <span class="dt-emoji">📖</span>
       <span class="dt-name">Evangelio leído<small>Punto extra · +${rs.gospelDays * GOSPEL_BONUS} ${rs.gospelDays * GOSPEL_BONUS === 1 ? "pt" : "pts"}</small><i class="dt-bar"><em style="width:${(rs.gospelDays / rs.days) * 100}%"></em></i></span>
-      <span class="dt-pts"><b>${Math.round((rs.gospelDays / rs.days) * 100)}%</b><small>${rs.gospelDays}/${rs.days} días</small></span>
+      <span class="dt-pts"><b>+${fmtPts(rs.gospelDays * GOSPEL_BONUS)} pts</b><small>${rs.gospelDays}/${rs.days} días</small></span>
     </div>` : '';
   if (!rows.length && !gospelRange && !flexRange) return `<div class="lc-detail">${head}<p class="muted">Sin objetivos en este periodo.</p></div>`;
   return `<div class="lc-detail">${head}<div class="dt-list">${rows.map((x) => `
     <button class="dt-row range" data-goal-filter="g:${x.g.id}">
       <span class="dt-emoji">${esc(x.g.emoji)}</span>
       <span class="dt-name">${esc(x.g.title)}<i class="dt-bar"><em style="width:${(x.rate || 0) * 100}%"></em></i></span>
-      <span class="dt-pts"><b>${Math.round((x.rate || 0) * 100)}%</b><small>${x.done}/${x.planned}</small></span>
+      <span class="dt-pts"><b>${fmtPts(x.frac * goalPoints(x.g))} pts</b><small>${x.done}/${x.planned} días</small></span>
     </button>`).join('')}${flexRange}${gospelRange}</div></div>`;
 }
 
@@ -4284,8 +4299,7 @@ function render(root, ctx) {
   const ff = goalFilter.startsWith('f:') ? (facets.find((f) => f.id === goalFilter.slice(2)) || { id: '__none', name: 'Sin faceta', emoji: '📌', color: '#94a3b8' }) : null;
   // faceta "activa" para la segunda fila de chips (la del objetivo elegido, si lo hay)
   const scopeFacet = ff ? ff.id : fg ? (fg.facetId || null) : null;
-  // Un objetivo libre no tiene % (no hay meta): se muestran directamente sus puntos
-  if (fg && isFlex(fg) && !fg.schedule.every) metric = 'pts';
+
   const cur = summary(goalFilter, from, to);
   let compare = '';
   let lineColor = ff ? ff.color : 'var(--success)';
@@ -4309,7 +4323,8 @@ function render(root, ctx) {
   const goalChips = goals.filter((g) => (scopeFacet == null ? true : scopeFacet === '__none' ? !g.facetId : g.facetId === scopeFacet));
 
   // rueda de tu vida (cumplimiento ponderado de cada faceta)
-  const wheel = facetStats(from, to).filter((x) => x.pts > 0);
+  const wheel = facetStats(from, to).filter((x) => x.pts > 0 || x.ptsDone > 0);
+  const wheelMax = Math.max(1, ...wheel.map((x) => x.ptsDone));
   // punto seleccionado por defecto: el último con datos (hoy o el mes en curso)
   let sel = -1;
   trend.forEach((p, i) => { if ((metric === 'pct' ? p.pct : p.pts) != null) sel = i; });
@@ -4396,7 +4411,7 @@ function render(root, ctx) {
     <section class="section">
       <div class="card hero-stats">
         <div class="ring big">${ringSvg(112, 11, st.rate || 0, st.rate != null && st.rate >= thr ? 'var(--success)' : 'var(--accent)')}
-          <div class="ring-val"><b>${st.rate == null ? '—' : Math.round(st.rate * 100)}</b>${st.rate == null ? '' : '<small>%</small>'}<span>cumplido</span></div></div>
+          <div class="ring-val"><b>${fmtPts(st.ptsDone)}</b><small>pts</small><span>${st.pts ? `de ${fmtPts(st.pts)} previstos` : 'conseguidos'}</span></div></div>
         <div class="hs-list">
           <div class="hs-item"><span class="hs-val">${st.achievedDays}<small>/${st.trackedDays}</small></span><span class="hs-lbl">Días logrados</span></div>
           <div class="hs-item"><span class="hs-val">🔥 ${streak}</span><span class="hs-lbl">Racha · mejor ${best}</span></div>
@@ -4405,7 +4420,7 @@ function render(root, ctx) {
       </div>
       <div class="mini-stats">
         <div class="ms"><b>${st.done}</b><span>objetivos cumplidos</span></div>
-        <div class="ms"><b>${st.perfectDays}</b><span>días perfectos</span></div>
+        <div class="ms"><b>+${fmtPts(st.bonus)}</b><span>pts extra</span></div>
         <div class="ms"><b>${st.gospelDays}</b><span>días con Evangelio</span></div>
       </div>
     </section>
@@ -4414,14 +4429,10 @@ function render(root, ctx) {
       <div class="card chart-card trend-card">
         <div class="trend-top">
           <div class="trend-head">
-            <div class="th-label">${single ? `${esc(fg.emoji)} ${esc(fg.title)}` : ff ? `${esc(ff.emoji)} ${esc(ff.name)}` : 'Cumplimiento'} · ${when}</div>
+            <div class="th-label">${single ? `${esc(fg.emoji)} ${esc(fg.title)}` : ff ? `${esc(ff.emoji)} ${esc(ff.name)}` : 'Puntos'} · ${when}</div>
             <div class="th-row"><div class="th-val">${bigVal}</div>${compare}</div>
           </div>
-          <div class="seg two metric-seg">
-            <div class="seg-thumb" style="transform: translateX(${metric === 'pct' ? 0 : 100}%)"></div>
-            <button class="${metric === 'pct' ? 'active' : ''}" data-metric="pct">%</button>
-            <button class="${metric === 'pts' ? 'active' : ''}" data-metric="pts">Puntos</button>
-          </div>
+
         </div>
         ${facets.length ? `<div class="chips-scroll" aria-label="Filtrar por faceta">
           <button class="fchip ${goalFilter === 'all' ? 'on' : ''}" data-goal-filter="all">Todo</button>
@@ -4443,15 +4454,15 @@ function render(root, ctx) {
 
     <section class="section">
       <div class="card chart-card">
-        <div class="cc-head"><h3>Rueda de tu vida</h3><span class="muted">% por faceta</span></div>
-        ${wheel.length >= 3 ? radarChart(wheel.map((x) => ({ label: x.facet.name, emoji: x.facet.emoji, color: x.facet.color, value: x.rate || 0 })))
+        <div class="cc-head"><h3>Rueda de tu vida</h3><span class="muted">Puntos por faceta</span></div>
+        ${wheel.length >= 3 ? radarChart(wheel.map((x) => ({ label: x.facet.name, emoji: x.facet.emoji, color: x.facet.color, value: x.ptsDone / wheelMax, text: `${fmtPts(x.ptsDone)} pts` })))
           : wheel.length ? `<div class="facet-bars">${wheel.map((x) => `<div class="fb-row" style="--fc:${x.facet.color}">
               <span class="fb-name">${esc(x.facet.emoji)} ${esc(x.facet.name)}</span>
-              <div class="fb-track"><i style="width:${(x.rate || 0) * 100}%"></i></div><b>${pct(x.rate)}</b></div>`).join('')}</div>
+              <div class="fb-track"><i style="width:${(x.ptsDone / wheelMax) * 100}%"></i></div><b>${fmtPts(x.ptsDone)} pts</b></div>`).join('')}</div>
               <p class="hint">Con 3 facetas o más verás la rueda completa.</p>`
           : ''}
         ${wheel.length ? `<div class="facet-legend">${wheel.map((x) => `<button class="fl-item" data-goal-filter="f:${x.facet.id}" style="--fc:${x.facet.color}">
-            <span>${esc(x.facet.emoji)} ${esc(x.facet.name)}</span><b>${pct(x.rate)}</b></button>`).join('')}</div>`
+            <span>${esc(x.facet.emoji)} ${esc(x.facet.name)}</span><b>${fmtPts(x.ptsDone)} pts</b></button>`).join('')}</div>`
           : `<button class="tip-card" data-facets><span>🧭</span><div><b>Crea tus facetas</b>Agrupa tus objetivos (Fe, Ejercicio, Finanzas…) para ver aquí el equilibrio de tu vida.</div>${icons.chevronRight}</button>`}
       </div>
     </section>
