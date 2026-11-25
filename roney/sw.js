@@ -11,7 +11,7 @@
    Aun así, SUBE CACHE_NAME en cada cambio de index.html/manifest/iconos:
    es lo que fuerza a renovar iconos y manifest y a limpiar cachés viejas. */
 const PREFIX = "roney-";
-const CACHE_NAME = PREFIX + "shell-v5";
+const CACHE_NAME = PREFIX + "shell-v6";
 const ASSETS = [
   "./",
   "./index.html",
